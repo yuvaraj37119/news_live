@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import ArticleCard from '../components/ArticleCard';
 import { translateCategoryName, uiText } from '../i18n';
-import { fetchJson, formatDate } from '../services/api';
+import { formatDate } from '../services/api';
 
 const marketData = [
   { name: 'S&P 500', value: '5,436.19', delta: '+1.42%' },
@@ -17,23 +17,48 @@ const marketData = [
 ];
 
 const categoryCoverage = ['World', 'Business', 'Politics', 'Tech', 'Culture', 'Climate', 'Analysis'];
-const NEWSDATA_LIVE_NEWS_URL = 'https://newsdata.io/api/1/latest?apikey=pub_cafbc04982c14ebeb9c429533f5cd8b6';
-const fallbackLiveNews = [];
 
-export default function HomePage({ articles, language = 'en' }) {
-  const [liveNews, setLiveNews] = useState([]);
+function describeWeatherCode(code) {
+  if (code === 0) return 'Clear sky';
+  if ([1, 2].includes(code)) return 'Mainly clear / partly cloudy';
+  if (code === 3) return 'Overcast';
+  if ([45, 48].includes(code)) return 'Fog';
+  if ([51, 53, 55, 56, 57].includes(code)) return 'Drizzle';
+  if ([61, 63, 65, 66, 67].includes(code)) return 'Rain';
+  if ([71, 73, 75, 77].includes(code)) return 'Snow';
+  if ([80, 81, 82].includes(code)) return 'Rain showers';
+  if ([85, 86].includes(code)) return 'Snow showers';
+  if ([95, 96, 99].includes(code)) return 'Thunderstorm';
+  return 'Conditions unavailable';
+}
+
+export default function HomePage({
+  articles,
+  language = 'en',
+  onLoadMore,
+  hasMore,
+  loadingMore,
+}) {
+  const [weather, setWeather] = useState(null);
+  const [weatherLoading, setWeatherLoading] = useState(true);
+  const [weatherError, setWeatherError] = useState('');
   const t = uiText[language] || uiText.en;
+
   const lead = articles.find((item) => item.featured) || articles[0];
-  const stories = articles.slice(0, 6);
+  const featuredArticle = lead;
+  const stories = articles;
   const featured = articles.slice(0, 4);
   const localizedCategoryCoverage = categoryCoverage.map((category) => ({
     key: category,
     label: translateCategoryName(category, language),
   }));
-  const tickerItems = useMemo(() => {
-    const source = liveNews.length ? liveNews : (articles || []).map((item) => item?.title || '').filter(Boolean);
-    return source.map((item) => (typeof item === 'string' ? item : item?.title || item?.description || '')).filter(Boolean).slice(0, 6);
-  }, [articles, liveNews]);
+  const tickerItems = useMemo(
+    () => (articles || [])
+      .map((article) => article?.title || '')
+      .filter(Boolean)
+      .slice(0, 6),
+    [articles]
+  );
   const trendingTopics = [
     t.aiInfrastructure,
     t.globalEconomy,
@@ -46,48 +71,107 @@ export default function HomePage({ articles, language = 'en' }) {
   useEffect(() => {
     let active = true;
 
-    const loadLiveNews = async () => {
+    async function loadWeather(latitude, longitude, locationName) {
       try {
-        const payload = await fetchJson(NEWSDATA_LIVE_NEWS_URL);
-        const headlines = Array.isArray(payload?.results) ? payload.results : [];
-        const next = headlines
-          .map((item) => item?.title || item?.description)
-          .filter(Boolean)
-          .slice(0, 6);
+        const url = new URL('https://api.open-meteo.com/v1/forecast');
+
+        url.searchParams.set('latitude', latitude);
+        url.searchParams.set('longitude', longitude);
+        url.searchParams.set(
+          'current',
+          'temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m'
+        );
+        url.searchParams.set('timezone', 'auto');
+
+        const response = await fetch(url.toString());
+
+        if (!response.ok) {
+          throw new Error('Weather service unavailable');
+        }
+
+        const data = await response.json();
+        const current = data.current;
+
+        if (!current) {
+          throw new Error('No current weather data');
+        }
 
         if (active) {
-          setLiveNews(next.length ? next : (articles || []).map((item) => item?.title || '').filter(Boolean).slice(0, 6));
+          setWeather({
+            location: locationName,
+            temperature: current.temperature_2m,
+            feelsLike: current.apparent_temperature,
+            humidity: current.relative_humidity_2m,
+            wind: current.wind_speed_10m,
+            precipitation: current.precipitation,
+            condition: describeWeatherCode(current.weather_code),
+            updatedAt: current.time,
+          });
+          setWeatherError('');
         }
       } catch (error) {
         if (active) {
-          setLiveNews((articles || []).map((item) => item?.title || '').filter(Boolean).slice(0, 6));
+          setWeatherError('');
+          setWeather({
+            location: 'Chennai',
+            temperature: 30,
+            feelsLike: 31,
+            humidity: 68,
+            wind: 10,
+            precipitation: 0,
+            condition: 'Default weather fallback',
+            updatedAt: new Date().toISOString(),
+          });
         }
+      } finally {
+        if (active) setWeatherLoading(false);
       }
-    };
+    }
 
-    loadLiveNews();
-    return () => { active = false; };
-  }, [articles]);
+    const loadDefaultWeather = () => loadWeather(13.0827, 80.2707, 'Chennai');
+
+    const geolocationAvailable = typeof navigator !== 'undefined' && 'geolocation' in navigator;
+
+    if (!geolocationAvailable || window.location.protocol === 'file:') {
+      loadDefaultWeather();
+      return undefined;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        loadWeather(
+          position.coords.latitude,
+          position.coords.longitude,
+          'Your location'
+        );
+      },
+      () => {
+        loadDefaultWeather();
+      },
+      { timeout: 5000, maximumAge: 600000, enableHighAccuracy: false }
+    );
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   if (!lead) {
     return <div className="empty-state">{t.noArticles}</div>;
   }
 
-  const climateData = [
-    { key: 'heatIndex', value: '34°C' },
-    { key: 'coastalRisk', value: 'Moderate' },
-    { key: 'cleanPower', value: '38%' },
-    { key: 'stormWatch', value: 'Low' },
-  ];
-
   return (
     <main className="home-page">
       <div className="ticker-bar">
         <span className="ticker-label">{t.live}</span>
-        <div className="ticker-track">
-          {tickerItems.map((item, index) => (
-            <span key={`${item}-${index}`}>{item}</span>
-          ))}
+        <div className="ticker-viewport">
+          <div className="ticker-track">
+            {[...tickerItems, ...tickerItems].map((item, index) => (
+              <span className="ticker-item" key={`${item}-${index}`}>
+                {item}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -122,7 +206,7 @@ export default function HomePage({ articles, language = 'en' }) {
           <div className="panel-box">
             <div className="panel-header">
               <span className="eyebrow">{t.marketPulse}</span>
-              <h3>{t.markets}</h3>
+              <h3>Sample market data</h3>
             </div>
             <div className="market-list">
               {marketData.map((entry) => (
@@ -140,18 +224,44 @@ export default function HomePage({ articles, language = 'en' }) {
           <div className="panel-box">
             <div className="panel-header">
               <span className="eyebrow">{t.climateBrief}</span>
-              <h3>{t.resilienceWatch}</h3>
+              <h3>Weather & Conditions</h3>
             </div>
-            <div className="market-list">
-              {climateData.map((entry) => (
-                <div className="market-row" key={entry.key}>
-                  <span>{t[entry.key]}</span>
-                  <div>
-                    <strong>{entry.value}</strong>
+
+            {weatherLoading ? (
+              <p className="weather-status">Loading current weather…</p>
+            ) : weatherError || !weather ? (
+              <p className="weather-status">Live weather is temporarily unavailable.</p>
+            ) : (
+              <>
+                <p className="weather-location">{weather.location}</p>
+
+                <div className="weather-temperature">
+                  <strong>{weather.temperature}°C</strong>
+                  <span>{weather.condition}</span>
+                </div>
+
+                <div className="market-list">
+                  <div className="market-row">
+                    <span>Feels like</span>
+                    <strong>{weather.feelsLike}°C</strong>
+                  </div>
+                  <div className="market-row">
+                    <span>Humidity</span>
+                    <strong>{weather.humidity}%</strong>
+                  </div>
+                  <div className="market-row">
+                    <span>Wind speed</span>
+                    <strong>{weather.wind} km/h</strong>
+                  </div>
+                  <div className="market-row">
+                    <span>Precipitation</span>
+                    <strong>{weather.precipitation} mm</strong>
                   </div>
                 </div>
-              ))}
-            </div>
+
+                <p className="weather-updated">Weather observation: {weather.updatedAt}</p>
+              </>
+            )}
           </div>
 
           <div className="panel-box">
@@ -166,6 +276,32 @@ export default function HomePage({ articles, language = 'en' }) {
             </div>
           </div>
         </aside>
+      </section>
+
+      <section className="latest-news-section">
+        <div className="section-heading">
+          <span className="eyebrow">Latest updates</span>
+          <h2>More stories</h2>
+        </div>
+
+        <div className="latest-news-grid">
+          {(articles || [])
+            .filter((article) => {
+              const featuredId = featuredArticle?.id || featuredArticle?.slug;
+              const currentId = article?.id || article?.slug;
+
+              return !featuredId || currentId !== featuredId;
+            })
+            .slice(0, 3)
+            .map((article, index) => (
+              <ArticleCard
+                key={article.id || `${article.slug || 'story'}-${index}`}
+                article={article}
+                index={index}
+                language={language}
+              />
+            ))}
+        </div>
       </section>
 
       <section className="stats-grid">
@@ -204,16 +340,24 @@ export default function HomePage({ articles, language = 'en' }) {
 
       <section className="content-grid">
         <div className="main-stack">
-          <div className="section-heading">
-            <span className="eyebrow">{t.latest}</span>
-            <h2>{t.topStories}</h2>
-          </div>
+          {articles.slice(1, 4).map((article, index) => (
+            <ArticleCard key={article.id} article={article} index={index} language={language} />
+          ))}
 
-          <div className="story-grid">
-            {stories.map((article, index) => (
-              <ArticleCard key={article.id} article={article} index={index} language={language} />
-            ))}
-          </div>
+          {hasMore && (
+            <button
+              type="button"
+              className="primary-button load-more-button"
+              onClick={onLoadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? 'Loading…' : 'Load more stories'}
+            </button>
+          )}
+
+          {!hasMore && stories.length > 0 && (
+            <div className="end-of-news">You’re up to date.</div>
+          )}
         </div>
 
         <aside className="side-stack">

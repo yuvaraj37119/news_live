@@ -174,7 +174,10 @@ app.get('/api/search', async (req, res) => {
       category,
       sort: req.query.sort || 'newest',
       page: Number(req.query.page || 1),
-      limit: Number(req.query.limit || 9),
+      limit: Math.min(
+  Math.max(Number(req.query.limit) || 10, 10),
+  50
+),
     });
 
     return res.json(payload);
