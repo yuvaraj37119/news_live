@@ -1,4 +1,4 @@
-import { Component, useCallback, useEffect, useMemo, useState } from 'react';
+import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import Header from './components/Header';
 import LoadingScreen from './components/LoadingScreen';
@@ -10,7 +10,7 @@ import AdminPage from './pages/AdminPage';
 import NotFoundPage from './pages/NotFoundPage';
 import { localizeArticles, supportedLanguages } from './i18n';
 import { API_BASE, fetchJson } from './services/api';
-import { fetchLiveArticles } from './services/newsApi';
+import { fetchLiveArticles, fetchNewsFromApi, isNewsRateLimited } from './services/newsApi';
 
 const allowedLanguages = new Set(supportedLanguages.map(({ value }) => value));
 
@@ -61,6 +61,8 @@ function App() {
   const [nextPage, setNextPage] = useState(null);
   const [error, setError] = useState('');
   const [loadingScreen, setLoadingScreen] = useState(true);
+  const loadingMoreRef = useRef(false);
+  const requestedPagesRef = useRef(new Set());
 
   const [language, setLanguage] = useState(() => {
     const saved = localStorage.getItem('freshnews_language');
@@ -76,7 +78,10 @@ function App() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  const refreshArticles = async (selectedLanguage = language) => {
+  const refreshArticles = useCallback(async (selectedLanguage, signal) => {
+    requestedPagesRef.current.clear();
+    loadingMoreRef.current = false;
+
     setLoading(true);
     setError('');
     setArticles([]);
@@ -86,72 +91,93 @@ function App() {
     try {
       const response = await fetchLiveArticles({
         language: selectedLanguage,
+        signal,
       });
+
+      if (signal.aborted) return;
 
       const liveArticles = response.items || [];
 
-      if (liveArticles.length > 0) {
-        setArticles(liveArticles);
-        setNextPage(response.nextPage || null);
-        setHasMore(Boolean(response.nextPage));
+      setArticles(liveArticles);
+      setNextPage(response.nextPage || null);
+      setHasMore(Boolean(response.nextPage));
+
+      if (liveArticles.length === 0) {
+        setError(
+          selectedLanguage === 'ta'
+            ? 'தமிழ் செய்திகள் தற்போது கிடைக்கவில்லை. சிறிது நேரம் கழித்து முயற்சிக்கவும்.'
+            : 'No live news is available right now. Please try again later.'
+        );
+      }
+    } catch (requestError) {
+      if (signal.aborted || requestError?.name === 'AbortError') {
         return;
       }
 
-      throw new Error('No live stories returned');
-    } catch (requestError) {
-      console.warn('Live news unavailable:', requestError.message);
+      console.error('Live news request failed:', requestError);
 
-      try {
-        const payload = await fetchJson(
-          `${API_BASE}/articles?limit=24`
-        );
-
-        const fallback = Array.isArray(payload)
-          ? payload
-          : payload.items || [];
-
-        setArticles(fallback);
-
-        if (fallback.length === 0) {
-          setError('No articles are available. Please try again later.');
-        }
-      } catch (fallbackError) {
-        setArticles([]);
-        setError(
-          'News is temporarily unavailable. Please try again later.'
-        );
-      }
+      setArticles([]);
+      setNextPage(null);
+      setHasMore(false);
+      setError(
+        selectedLanguage === 'ta'
+          ? 'தமிழ் செய்திகளை ஏற்ற முடியவில்லை. API வரம்பைச் சரிபார்த்து மீண்டும் முயற்சிக்கவும்.'
+          : requestError?.message || 'Failed to send request. Please try again.'
+      );
     } finally {
-      setLoading(false);
+      if (!signal.aborted) {
+        setLoading(false);
+      }
     }
-  };
-
-  useEffect(() => {
-    refreshArticles(language);
-    // Initial load only; language changes are handled separately.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadMoreNews = useCallback(async () => {
-    if (!nextPage || loadingMore) return;
+  useEffect(() => {
+    const controller = new AbortController();
 
+    refreshArticles(language, controller.signal);
+
+    return () => controller.abort();
+  }, [language, refreshArticles]);
+
+  const loadMoreNews = useCallback(async () => {
+    const page = nextPage;
+
+    if (!page || loadingMoreRef.current || isNewsRateLimited()) {
+      setHasMore(false);
+      return;
+    }
+    if (requestedPagesRef.current.has(page)) return;
+
+    loadingMoreRef.current = true;
+    requestedPagesRef.current.add(page);
     setLoadingMore(true);
+    setError('');
 
     try {
-      const response = await fetchLiveArticles({
+      const response = await fetchNewsFromApi({
         language,
-        page: nextPage,
+        page,
       });
 
-      setArticles((current) => uniqueArticles([...current, ...response.items]));
-      setNextPage(response.nextPage);
-      setHasMore(Boolean(response.nextPage));
+      setArticles((current) => uniqueArticles([
+        ...current,
+        ...(response.articles || []),
+      ]));
+
+      const next = response.nextPage || null;
+      const hasNextPage = Boolean(next && next !== page);
+
+      setNextPage(next && hasNextPage ? next : null);
+      setHasMore(hasNextPage);
     } catch (requestError) {
+      setNextPage(null);
+      setHasMore(false);
       setError(requestError.message || 'Unable to load more news.');
     } finally {
+      loadingMoreRef.current = false;
       setLoadingMore(false);
     }
-  }, [language, nextPage, loadingMore]);
+  }, [language, nextPage]);
 
   const localizedArticles = useMemo(() => {
     const localized = localizeArticles(articles, language);

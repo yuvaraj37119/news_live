@@ -97,6 +97,10 @@ export default function AdminPage() {
   };
 
   const handleDelete = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this article?')) {
+      return;
+    }
+
     try {
       await fetchJson(`http://localhost:5000/api/admin/articles/${id}`, {
         method: 'DELETE',
@@ -162,6 +166,19 @@ export default function AdminPage() {
             </label>
             <div className="form-actions">
               <button type="submit" className="primary-button">{editingId ? 'Update article' : 'Create article'}</button>
+              {editingId && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    setForm({ ...emptyForm });
+                    setEditingId(null);
+                    setStatus('');
+                  }}
+                >
+                  Cancel editing
+                </button>
+              )}
               <button type="button" className="secondary-button" onClick={onLogout}>Log out</button>
             </div>
           </form>

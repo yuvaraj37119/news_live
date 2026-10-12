@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import ArticleCard from '../components/ArticleCard';
 import { translateCategoryName, uiText } from '../i18n';
@@ -42,10 +42,19 @@ export default function HomePage({
   const [weather, setWeather] = useState(null);
   const [weatherLoading, setWeatherLoading] = useState(true);
   const [weatherError, setWeatherError] = useState('');
+  const loadMoreSentinel = useRef(null);
+  const intersectionArmed = useRef(true);
   const t = uiText[language] || uiText.en;
 
   const lead = articles.find((item) => item.featured) || articles[0];
   const featuredArticle = lead;
+  const moreStories = (articles || [])
+    .filter(
+      (article) =>
+        String(article.id || article.slug) !==
+        String(lead?.id || lead?.slug)
+    )
+    .slice(0, 3);
   const stories = articles;
   const featured = articles.slice(0, 4);
   const localizedCategoryCoverage = categoryCoverage.map((category) => ({
@@ -67,6 +76,34 @@ export default function HomePage({
     t.sportsAnalytics,
     t.culturalShifts,
   ];
+
+  useEffect(() => {
+    const sentinel = loadMoreSentinel.current;
+
+    if (!sentinel || !hasMore || loadingMore) return undefined;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting) {
+          intersectionArmed.current = true;
+          return;
+        }
+
+        if (!intersectionArmed.current) return;
+
+        intersectionArmed.current = false;
+        onLoadMore?.();
+      },
+      {
+        rootMargin: '100px 0px',
+        threshold: 0,
+      }
+    );
+
+    observer.observe(sentinel);
+
+    return () => observer.disconnect();
+  }, [hasMore, loadingMore, onLoadMore]);
 
   useEffect(() => {
     let active = true;
@@ -202,6 +239,24 @@ export default function HomePage({
           </div>
         </motion.article>
 
+        <div className="hero-extra-news">
+          {(articles || [])
+            .filter(
+              (article) =>
+                String(article.id || article.slug) !==
+                String(lead?.id || lead?.slug)
+            )
+            .slice(0, 3)
+            .map((article, index) => (
+              <ArticleCard
+                key={article.id || article.slug || index}
+                article={article}
+                index={index}
+                language={language}
+              />
+            ))}
+        </div>
+
         <aside className="sidebar-panel">
           <div className="panel-box">
             <div className="panel-header">
@@ -278,32 +333,6 @@ export default function HomePage({
         </aside>
       </section>
 
-      <section className="latest-news-section">
-        <div className="section-heading">
-          <span className="eyebrow">Latest updates</span>
-          <h2>More stories</h2>
-        </div>
-
-        <div className="latest-news-grid">
-          {(articles || [])
-            .filter((article) => {
-              const featuredId = featuredArticle?.id || featuredArticle?.slug;
-              const currentId = article?.id || article?.slug;
-
-              return !featuredId || currentId !== featuredId;
-            })
-            .slice(0, 3)
-            .map((article, index) => (
-              <ArticleCard
-                key={article.id || `${article.slug || 'story'}-${index}`}
-                article={article}
-                index={index}
-                language={language}
-              />
-            ))}
-        </div>
-      </section>
-
       <section className="stats-grid">
         {[
           { value: '2.4M', label: 'daily readers' },
@@ -339,26 +368,7 @@ export default function HomePage({
       </section>
 
       <section className="content-grid">
-        <div className="main-stack">
-          {articles.slice(1, 4).map((article, index) => (
-            <ArticleCard key={article.id} article={article} index={index} language={language} />
-          ))}
-
-          {hasMore && (
-            <button
-              type="button"
-              className="primary-button load-more-button"
-              onClick={onLoadMore}
-              disabled={loadingMore}
-            >
-              {loadingMore ? 'Loading…' : 'Load more stories'}
-            </button>
-          )}
-
-          {!hasMore && stories.length > 0 && (
-            <div className="end-of-news">You’re up to date.</div>
-          )}
-        </div>
+        <div className="main-stack" />
 
         <aside className="side-stack">
           <div className="panel-box">
@@ -368,13 +378,19 @@ export default function HomePage({
             </div>
             <div className="brief-list">
               {featured.map((item) => (
-                <div key={item.id} className="brief-item">
-                  <span className="brief-tag">{translateCategoryName(item.category, language)}</span>
-                  <div>
-                    <h4>{item.title}</h4>
-                    <small>{formatDate(item.publishedAt)}</small>
+                <Link
+                  key={item.id}
+                  to={item.slug ? `/article/${item.slug}` : `/article/${item.id}`}
+                  className="brief-article-link"
+                >
+                  <div className="brief-item">
+                    <span className="brief-tag">{translateCategoryName(item.category, language)}</span>
+                    <div>
+                      <h4>{item.title}</h4>
+                      <small>{formatDate(item.publishedAt)}</small>
+                    </div>
                   </div>
-                </div>
+                </Link>
               ))}
             </div>
           </div>
@@ -386,14 +402,57 @@ export default function HomePage({
             </div>
             <div className="compact-list">
               {articles.slice(0, 3).map((item) => (
-                <div key={item.id} className="compact-item">
-                  <h4>{item.title}</h4>
-                  <span>{item.category} • {item.readTime || '5 min read'}</span>
-                </div>
+                <Link
+                  key={item.id}
+                  to={item.slug ? `/article/${item.slug}` : `/article/${item.id}`}
+                  className="compact-item-link"
+                >
+                  <div className="compact-item">
+                    <h4>{item.title}</h4>
+                    <span>{item.category} • {item.readTime || '5 min read'}</span>
+                  </div>
+                </Link>
               ))}
             </div>
           </div>
         </aside>
+      </section>
+
+      <section className="infinite-news-section">
+        <div className="section-heading">
+          <span className="eyebrow">EXPLORE THE NEWS</span>
+          <h2>More stories</h2>
+          <p>Discover the latest stories from around the world.</p>
+        </div>
+
+        {articles.slice(4).length > 0 ? (
+          <div className="infinite-news-grid">
+            {articles.slice(4).map((article, index) => (
+              <ArticleCard
+                key={article.id || article.slug || index}
+                article={article}
+                index={index}
+                language={language}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="empty-state">No more stories available right now.</p>
+        )}
+
+        {hasMore && (
+          <div className="loading-state">Loading more stories…</div>
+        )}
+
+        {loadingMore && (
+          <div className="loading-state">Loading more stories…</div>
+        )}
+
+        {!hasMore && articles.length > 0 && (
+          <div className="end-of-news">You’re up to date.</div>
+        )}
+
+        <div ref={loadMoreSentinel} className="load-more-sentinel" aria-hidden="true" />
       </section>
     </main>
   );
