@@ -4,7 +4,7 @@ const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 
 const dataDir = path.resolve(__dirname, '../data');
-const databaseFile = path.join(dataDir, 'newsroom.db');
+const databaseFile = process.env.SQLITE_DB_PATH || path.join(dataDir, 'newsroom.db');
 const schemaFile = path.join(dataDir, 'schema.sql');
 
 const DEFAULT_ARTICLES = [
