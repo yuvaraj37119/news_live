@@ -202,7 +202,6 @@ export async function fetchLiveArticles({
     const params = new URLSearchParams({
       apikey: API_KEY,
       language: selectedLanguage,
-      page_size: '10',
     });
 
     if (category) params.set('category', category);
@@ -239,27 +238,39 @@ export async function fetchLiveArticles({
     }
 
     if (!response.ok || payload?.status !== 'success') {
+      console.error('NewsData API response:', {
+        status: response.status,
+        payload,
+      });
+
       throw new Error(
         payload?.results?.message ||
         payload?.message ||
-        `News API request failed: ${response.status}`
+        payload?.detail ||
+        `NewsData API request failed: ${response.status}`
       );
     }
 
     const results = Array.isArray(payload.results) ? payload.results : [];
-    const currentPage = Number(page || 1);
-    const hasMore = Boolean(payload.nextPage && payload.nextPage !== String(currentPage));
+    const nextPage = payload.nextPage || null;
 
     const data = {
       items: results
-        .map((item, index) => normalizeNewsItem({
-          ...item,
-          article_id: item.article_id || item.id,
-          link: item.link || item.url,
-          description: item.description || item.summary || item.content,
-        }, index, language))
+        .map((item, index) =>
+          normalizeNewsItem(
+            {
+              ...item,
+              article_id: item.article_id || item.id,
+              link: item.link || item.url,
+              description:
+                item.description || item.summary || item.content,
+            },
+            index,
+            selectedLanguage
+          )
+        )
         .filter((item) => item.title),
-      nextPage: hasMore ? String(currentPage + 1) : null,
+      nextPage,
       totalResults: Number(payload.totalResults || results.length),
     };
 
